@@ -18,7 +18,9 @@ class FileTree:
         self.filepath = filepath
 
     def render(self) -> dmc.Accordion:
-        return dmc.Accordion(FileTree.build_tree(self.filepath, isRoot=True), id="file-explorer", )
+        return dmc.Accordion(
+            FileTree.build_tree(self.filepath, isRoot=True), id="file-explorer"
+        )
 
     @staticmethod
     def flatten(l):
@@ -38,17 +40,21 @@ class FileTree:
     @staticmethod
     def build_tree(path, isRoot=False):
         d = []
-        if os.path.isdir(path): # if it is a folder
-            children = [FileTree.build_tree(os.path.join(path, x)) for x in os.listdir(path)]
+        if os.path.isdir(path):  # if it is a folder
+            children = [
+                FileTree.build_tree(os.path.join(path, x)) for x in os.listdir(path)
+            ]
             if isRoot:
                 return FileTree.flatten(children)
             item = dmc.AccordionItem(
                 [
                     dmc.AccordionControl(FileTree.make_folder(os.path.basename(path))),
-                    dmc.AccordionPanel(children=FileTree.flatten(children))
-                ],value=path)
+                    dmc.AccordionPanel(children=FileTree.flatten(children)),
+                ],
+                value=path,
+            )
             d.append(item)
-            
+
         else:
             d.append(FileTree.make_file(os.path.basename(path)))
         return d
