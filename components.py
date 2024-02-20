@@ -23,12 +23,15 @@ graph = dcc.Graph(
             "annotationText": False,
         },
     },
+    style={"width": "80%"},
 )
 
 matplotlib_image = html.Img(id="figure-image")
 confirm_button = html.Button(
     ["Confirm"], id="confirm-button", style={"display": "none"}
 )
+rmse_label = dmc.Text(id="rmse-label")
+rsquared_label = dmc.Text(id="rsquared-label")
 
 image_div = html.Div(
     style={"display": "flex"},
@@ -36,6 +39,8 @@ image_div = html.Div(
         matplotlib_image,
         html.Div(
             [
+                rmse_label,
+                rsquared_label,
                 dmc.Select(
                     label="Does the fitting look good?",
                     placeholder="Yes/No",
@@ -89,5 +94,7 @@ class Components:
         self.home_div = home_div
         self.graph = graph
         self.matplotlib_image = matplotlib_image
+        self.rmse_label = rmse_label
+        self.rsquared_label = rsquared_label
         self.confirm_button = confirm_button
         self.image_div = image_div

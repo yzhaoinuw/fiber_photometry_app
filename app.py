@@ -114,7 +114,22 @@ def list_channels(n_clicks, folder_path):
         data=select_pulse,
     )
 
-    return [select_exp_component, select_control_component, select_pulse_component], []
+    enter_filter_component = dmc.NumberInput(
+        id="filter-input",
+        label="Enter mean filter value",
+        # description="",
+        value=1000,
+        min=1,
+        max=2000,
+        # style={"width": 250},
+    )
+
+    return [
+        select_exp_component,
+        select_control_component,
+        select_pulse_component,
+        enter_filter_component,
+    ], []
 
 
 @app.callback(
@@ -140,9 +155,10 @@ def show_process_button(exp_channel, control_channel, pulse_channel):
     State("exp-data-select", "value"),
     State("control-data-select", "value"),
     State("pulse-select", "value"),
+    State("filter-input", "value"),
     prevent_initial_call=True,
 )
-def fit_data(n_clicks, exp_channel, control_channel, ttl_pulse):
+def fit_data(n_clicks, exp_channel, control_channel, ttl_pulse, filter_value):
     if n_clicks is None:
         raise PreventUpdate
 
@@ -167,7 +183,7 @@ def fit_data(n_clicks, exp_channel, control_channel, ttl_pulse):
     signal_405 = signal_405[first_TTL:]
 
     # Normalize and plot
-    MeanFilterOrder = 1000
+    MeanFilterOrder = filter_value
     MeanFilter = np.ones(MeanFilterOrder) / MeanFilterOrder
     fs_signal = np.arange(len(signal_465))
     sec_signal = fs_signal / signal_fs
@@ -176,9 +192,12 @@ def fit_data(n_clicks, exp_channel, control_channel, ttl_pulse):
     controlFit_465 = a * signal_405 + b
     controlFit_465 = filtfilt(MeanFilter, 1, controlFit_465)
     normDat = (signal_465 - controlFit_465) / controlFit_465
-    delta_465 = normDat * 100
+    delta_465 = normDat * MeanFilterOrder
     cache.set("time", sec_signal[1000:])
     cache.set("normalized_signal", delta_465[1000:])
+
+    rmse = np.sqrt(np.mean((signal_465[1000:] - controlFit_465[1000:]) ** 2))
+    components.rmse_label.children = f"RMSE: {rmse:.2f}"
 
     fig = plt.figure(figsize=(10, 8))
     plt.subplot(4, 1, 1)
@@ -240,11 +259,37 @@ def show_visualization(n_clicks, value):
             mode="lines+markers",
             hoverinfo="x+y",
         ),
-        hf_x=sec_signal[1000:],
-        hf_y=delta_465[1000:],
+        hf_x=sec_signal,
+        hf_y=delta_465,
     )
+
+    fig.update_layout(
+        autosize=True,
+        margin=dict(t=50, l=20, r=20, b=40),
+        height=800,
+        hoverlabel=dict(bgcolor="rgba(255, 255, 255, 0.6)"),
+        title_text="Normalized Signal",
+        font=dict(
+            size=12,  # title font size
+        ),
+        modebar_remove=["lasso2d", "zoom", "autoScale"],
+        dragmode="pan",
+        # clickmode="event",
+    )
+    cache.set("fig_resampler", fig)
     components.graph.figure = fig
     return components.graph
+
+
+@app.callback(
+    Output("graph", "figure", allow_duplicate=True),
+    Input("graph", "relayoutData"),
+    prevent_initial_call=True,
+    memoize=True,
+)
+def update_fig(relayoutdata):
+    fig = cache.get("fig_resampler")
+    return fig.construct_update_data_patch(relayoutdata)
 
 
 if __name__ == "__main__":
