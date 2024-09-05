@@ -63,7 +63,7 @@ home_div = html.Div(
         html.Div(
             [
                 FileTree(
-                    "C:/Users/yzhao/python_projects/fiber_photometry/Datafiles_Viewpoint_TuckerDavis/TDT files"
+                    "./TDT_files"
                 ).render()
             ],
             id="upper-container",

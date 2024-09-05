@@ -9,12 +9,12 @@ import os
 import base64
 import tempfile
 import webbrowser
-from threading import Timer
-import matplotlib.pyplot as plt
 from io import BytesIO
+from threading import Timer
 
 import dash
 from dash import Dash, html
+
 from flask_caching import Cache
 import dash_mantine_components as dmc
 from dash.exceptions import PreventUpdate
@@ -22,13 +22,10 @@ from dash.dependencies import Input, Output, State
 
 import tdt
 import numpy as np
-from scipy.signal import filtfilt
-
-import plotly.graph_objects as go
-from plotly_resampler import FigureResampler
-from plotly_resampler.aggregation import MinMaxLTTB
+import matplotlib.pyplot as plt
 
 from components import Components
+from func import extract_FP_data, filt_signal, fit_data, make_figure
 
 
 app = Dash(
@@ -103,14 +100,15 @@ def list_channels(n_clicks, folder_path):
     )
 
     pulse_list = data.epocs
-    select_pulse = [
-        {"value": pulse_name, "label": pulse_name} for pulse_name in pulse_list.keys()
-    ]
+    select_pulse = [{"value": None, "label": "NA (Not Available)"}]
+    select_pulse.extend(
+        [{"value": pulse_name, "label": pulse_name} for pulse_name in pulse_list.keys()]
+    )
     select_pulse_component = dmc.Select(
-        label="Select pulse",
+        label="Select ttl pulse",
         placeholder="",
         id="pulse-select",
-        value="",
+        value=None,
         data=select_pulse,
     )
 
@@ -140,7 +138,7 @@ def list_channels(n_clicks, folder_path):
     prevent_initial_call=True,
 )
 def show_process_button(exp_channel, control_channel, pulse_channel):
-    if exp_channel is None or control_channel is None or pulse_channel is None:
+    if exp_channel is None or control_channel is None:
         return dash.no_update
 
     return html.Button(
@@ -158,61 +156,48 @@ def show_process_button(exp_channel, control_channel, pulse_channel):
     State("filter-input", "value"),
     prevent_initial_call=True,
 )
-def fit_data(n_clicks, exp_channel, control_channel, ttl_pulse, filter_value):
+def plot_fit(n_clicks, exp_channel, control_channel, ttl_pulse, filter_value):
     if n_clicks is None:
         raise PreventUpdate
 
     data = cache.get("data")
     # analysis pipeline below
-    signal_fs = data.streams[exp_channel].fs
-    signal_465 = data.streams[exp_channel].data  # Assuming data is 1D
-    signal_405 = data.streams[control_channel].data  # Assuming data is 1D
-
-    # Removing FP trace prior to first TTL pulse
-    TTL_FP = data.epocs[ttl_pulse].onset
-
-    TTL_gap = np.diff(TTL_FP) > 10
-    if np.any(TTL_gap):
-        first_gap_index = np.where(TTL_gap)[0][0]
-        TTL_onset = TTL_FP[first_gap_index + 1]
-    else:
-        TTL_onset = TTL_FP[0]
-
-    first_TTL = int(TTL_onset * signal_fs)
-    signal_465 = signal_465[first_TTL:]
-    signal_405 = signal_405[first_TTL:]
-
-    # Normalize and plot
+    signal_fs, signal_465, signal_405 = extract_FP_data(
+        data, exp_channel, control_channel, ttl_pulse=ttl_pulse
+    )
+    # apply filtfilt to 465 and 405
     MeanFilterOrder = filter_value
-    MeanFilter = np.ones(MeanFilterOrder) / MeanFilterOrder
-    fs_signal = np.arange(len(signal_465))
-    sec_signal = fs_signal / signal_fs
-    reg = np.polyfit(signal_405, signal_465, 1)
-    a, b = reg
-    controlFit_465 = a * signal_405 + b
-    controlFit_465 = filtfilt(MeanFilter, 1, controlFit_465)
-    normDat = (signal_465 - controlFit_465) / controlFit_465
-    delta_465 = normDat * MeanFilterOrder
-    cache.set("time", sec_signal[1000:])
-    cache.set("normalized_signal", delta_465[1000:])
+    filt_465, filt_405 = filt_signal(
+        signal_465, signal_405, MeanFilterOrder=MeanFilterOrder
+    )
 
-    rmse = np.sqrt(np.mean((signal_465[1000:] - controlFit_465[1000:]) ** 2))
+    time_second, controlFit_465, deltaF_over_F_percentage, normalized_z_score = (
+        fit_data(signal_fs, filt_465, filt_405)
+    )
+
+    signal_fs = 1 / time_second[1]
+    cutoff = round(signal_fs * 5)
+    cache.set("time", time_second)
+    cache.set("deltaF_over_F_percentage", deltaF_over_F_percentage)
+    cache.set("normalized_z_score", normalized_z_score)
+
+    rmse = np.sqrt(np.mean((signal_465[cutoff:] - controlFit_465[cutoff:]) ** 2))
     components.rmse_label.children = f"RMSE: {rmse:.2f}"
 
     fig = plt.figure(figsize=(10, 8))
     plt.subplot(4, 1, 1)
-    plt.plot(sec_signal[1000:], signal_405[1000:])
-    plt.title("raw control")
+    plt.plot(time_second[cutoff:], filt_405[cutoff:])
+    plt.title("filt control")
     plt.subplot(4, 1, 2)
-    plt.plot(sec_signal[1000:], signal_465[1000:])
-    plt.title("raw signal")
+    plt.plot(time_second[cutoff:], filt_465[cutoff:])
+    plt.title("filt signal")
     plt.subplot(4, 1, 3)
-    plt.plot(sec_signal[1000:], signal_465[1000:])
-    plt.plot(sec_signal[1000:], controlFit_465[1000:])
+    plt.plot(time_second[cutoff:], filt_465[cutoff:])
+    plt.plot(time_second[cutoff:], controlFit_465[cutoff:])
     plt.title("fitted control")
     plt.subplot(4, 1, 4)
-    plt.plot(sec_signal[1000:], delta_465[1000:])
-    plt.title("normalized signal")
+    plt.plot(time_second[cutoff:], deltaF_over_F_percentage[cutoff:])
+    plt.title("delta F over F (%)")
     plt.tight_layout()
 
     buf = BytesIO()
@@ -243,39 +228,10 @@ def show_visualization(n_clicks, value):
     if value != "Yes":
         return dash.no_update
 
-    sec_signal = cache.get("time")
-    delta_465 = cache.get("normalized_signal")
-    fig = FigureResampler(
-        go.Figure(),
-        default_n_shown_samples=2000,
-        default_downsampler=MinMaxLTTB(parallel=True),
-    )
-    fig.add_trace(
-        go.Scattergl(
-            name="normalized signal",
-            line=dict(width=1),
-            marker=dict(size=2),
-            showlegend=False,
-            mode="lines+markers",
-            hoverinfo="x+y",
-        ),
-        hf_x=sec_signal,
-        hf_y=delta_465,
-    )
-
-    fig.update_layout(
-        autosize=True,
-        margin=dict(t=50, l=20, r=20, b=40),
-        height=800,
-        hoverlabel=dict(bgcolor="rgba(255, 255, 255, 0.6)"),
-        title_text="Normalized Signal",
-        font=dict(
-            size=12,  # title font size
-        ),
-        modebar_remove=["lasso2d", "zoom", "autoScale"],
-        dragmode="pan",
-        # clickmode="event",
-    )
+    time_second = cache.get("time")
+    deltaF_over_F_percentage = cache.get("deltaF_over_F_percentage")
+    normalized_z_score = cache.get("normalized_z_score")
+    fig = make_figure(time_second, deltaF_over_F_percentage, normalized_z_score)
     cache.set("fig_resampler", fig)
     components.graph.figure = fig
     return components.graph
@@ -294,4 +250,4 @@ def update_fig(relayoutdata):
 
 if __name__ == "__main__":
     Timer(1, open_browser).start()
-    app.run_server(debug=True, port=PORT)
+    app.run_server(debug=False, port=PORT)
